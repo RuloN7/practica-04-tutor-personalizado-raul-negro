@@ -13,9 +13,7 @@ import org.springframework.ai.document.Document;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
-import java.util.Arrays;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.stream.Collectors;
 
 @Service
@@ -38,33 +36,44 @@ public class TecnologiasService {
         List<Document> chunks = vectorStore.similaritySearch(
                 SearchRequest.builder()
                         .query(preguntaUsuario)
-                        .topK(5)
+                        .topK(10)
                         .similarityThreshold(0.5)
                         .build()
         );
-        String contexto = chunks.stream()
-                .map(d -> {
-                    String documento = d.getMetadata()
-                            .getOrDefault("file_path", "desconocido")
-                            .toString();
 
-                    return """
-                    =============================
-                    DOCUMENTO: %s
-                    CONTENIDO:
-                    %s
-                    """.formatted(
-                            documento,
-                            d.getText()
-                    );
-                })
-                .collect(Collectors.joining("\n\n---\n\n"));
-        PromptTemplate promptTemplate = new PromptTemplate(systemText);
-        Message systemMessage = promptTemplate.createMessage(Map.of("contexto", contexto));
-        Message userMessage = new UserMessage(preguntaUsuario);
-        Prompt prompt = new Prompt(List.of(systemMessage, userMessage));
+        if (chunks == null || chunks.isEmpty()) {
+            return Collections.emptyList();
+        }
 
-        return Arrays.asList(chatClient.prompt(prompt).call().entity(RespuestaDTO[].class));
+        Map<String, List<Document>> documentos = chunks.stream()
+                .collect(Collectors.groupingBy(
+                        d -> d.getMetadata()
+                                .getOrDefault("file_path", "desconocido")
+                                .toString()
+                ));
+
+        List<RespuestaDTO> respuestas = new ArrayList<>();
+        for (Map.Entry<String, List<Document>> entry : documentos.entrySet()) {
+            String documento = entry.getKey();
+            String contexto = entry.getValue().stream()
+                    .map(Document::getText)
+                    .collect(Collectors.joining("\n\n"));
+
+            PromptTemplate promptTemplate = new PromptTemplate(systemText);
+            Message systemMessage = promptTemplate.createMessage(Map.of("contexto", contexto));
+            Message userMessage = new UserMessage(preguntaUsuario);
+            Prompt prompt = new Prompt(List.of(systemMessage, userMessage));
+            RespuestaDTO respuesta = chatClient
+                    .prompt(prompt)
+                    .call()
+                    .entity(RespuestaDTO.class);
+
+            if (respuesta != null) {
+                respuesta.setDocumento(documento);
+                respuestas.add(respuesta);
+            }
+        }
+        return respuestas;
     }
 
 }
